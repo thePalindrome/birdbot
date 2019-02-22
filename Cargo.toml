@@ -1,0 +1,24 @@
+[package]
+name = "birdbot"
+version = "0.1.0"
+authors = ["Alex Ford <gordion42@gmail.com>"]
+
+[dependencies]
+serde_json = "1.0.6"
+serde = "1.0"
+serde_derive = "1.0"
+reqwest = "0.8.2"
+chrono = { version = "0.4", features = ["serde"] }
+lazy_static = "1.0"
+nix = "0.10.0"
+regex = "1"
+rand = "0.5"
+env_logger = "0.5.10"
+log = "0.4.0"
+typemap = "0.3.3"
+postgres = "0.15.2"
+
+
+[dependencies.serenity]
+version = "0.5"
+features = ["cache", "voice"]
