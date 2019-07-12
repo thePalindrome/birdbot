@@ -17,8 +17,5 @@ env_logger = "0.5.10"
 log = "0.4.0"
 typemap = "0.3.3"
 postgres = "0.15.2"
-
-
-[dependencies.serenity]
-version = "0.5"
-features = ["cache", "voice"]
+postgres-derive = "0.3"
+serenity = "0.6.2"

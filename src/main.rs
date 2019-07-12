@@ -10,7 +10,9 @@ extern crate typemap;
 #[macro_use] extern crate serde_json;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate log;
-extern crate postgres;
+#[macro_use] extern crate postgres_derive;
+#[macro_use] extern crate postgres;
+
 
 mod hm;
 mod skullgirls;
@@ -20,7 +22,6 @@ static mut THREADED: bool = false;
 use serenity::Client;
 use serenity::prelude::*;
 use serenity::model::prelude::*;
-use serenity::CACHE;
 
 use serde_json::Value;
 
@@ -64,6 +65,21 @@ struct BirdbotUser {
     is_admin: bool
 }
 
+#[derive(Debug, FromSql, ToSql)]
+#[postgres(name = "Record")] 
+struct MemberId {
+    uid: i64,
+    gid: i64
+}
+
+#[derive(Debug, FromSql, ToSql)]
+#[postgres(name = "permission_override")]
+struct Override {
+    channel: i64,
+    allow: i64,
+    deny: i64
+}
+
 impl Config {
     fn flush(&self) {
         let str = serde_json::to_string_pretty(self).unwrap();
@@ -95,15 +111,15 @@ config: Arc::new(Mutex::new(config)),
     }
 }
 
-fn paying_attention(msg: &Message) -> bool{
+fn paying_attention(ctx: &Context, msg: &Message) -> bool{
     // Check if I'm in a DM, being mentioned, or otherwise has been requested
-    if msg.is_own() {
+    if msg.is_own(ctx) {
         return false; // Don't react to my own messages, please
     }
     /*if msg.content.contains("birdbot") { // TODO: Allow disabling just using my name
       return true;
       }*/
-    if msg.mentions.iter().any( |x| { x.id == CACHE.read().user.id }) {
+    if msg.mentions.iter().any( |x| { x.id == ctx.cache.read().user.id }) {
         return true;
     }
     if msg.is_private() {
@@ -113,18 +129,48 @@ fn paying_attention(msg: &Message) -> bool{
 }
 
 impl EventHandler for Handler {
+    fn guild_member_addition(&self, ctx: Context, guild_id: GuildId, mut member: Member) {
+        let data = ctx.data.read();
+        let conn = data.get::<DbKey>().expect("Failed to read db handle").lock();
+        let user_id = member.user_id();
+        let member_id = MemberId {
+            uid: *user_id.as_u64() as i64,
+            gid: *guild_id.as_u64() as i64
+        };
+        // TODO: Figure out why the ToSql side of things is just so freaking broken.
+        let mut rows = conn.query("SELECT * FROM members WHERE id = ( CAST($1 AS BIGINT) , CAST($2 AS BIGINT) )", &[&member_id.uid, &member_id.gid]).unwrap(); // TODO: prepare this query for extra speed
+        if !rows.is_empty() {
+            let row = rows.get(0);
+            let roles: Vec<i64> = row.get("roles");
+            let overrides: Vec<Override> = row.get("overrides");
+            if roles.len() != 0 {
+                member.add_roles(&ctx, &roles.into_iter().map(|e| RoleId(e as u64)).collect::<Vec<_>>());
+            }
+            for perm in overrides.iter() {
+                ChannelId(perm.channel as u64).create_permission(&ctx, &PermissionOverwrite {
+                    allow: Permissions::from_bits_truncate(perm.allow as u64),
+                    deny: Permissions::from_bits_truncate(perm.deny as u64),
+                    kind: PermissionOverwriteType::Member(user_id),
+                });
+            }
+            /*if motd {
+                member.user.direct_message(&ctx, |m| {
+                    m.content(motd)
+                });
+            }*/
+        }
+    }
     fn message(&self, ctx: Context, msg: Message) {
-        if paying_attention(&msg) {
+        if paying_attention(&ctx,&msg) {
             lazy_static! {
-                static ref remind_regex: Regex = Regex::new("remind me (.*) in (\\d* \\w*)( every (\\d* \\w*))?").unwrap();
-                static ref factor_regex: Regex = Regex::new("factor (.\\d*)").unwrap();
-                static ref skullgirls_regex: Regex = Regex::new("[Pp]lay a game with (.*) (against|vs.|vs) (.*)").unwrap();
+                static ref remind_regex: Regex = Regex::new(r"(?i)remind me (.*?) in (\d* \w*)( every (\d* \w*))?").unwrap();
+                static ref factor_regex: Regex = Regex::new(r"(?i)factor (.\d*)").unwrap();
+                static ref skullgirls_regex: Regex = Regex::new(r"(?i)play a game with (.*) (against|vs.|vs) (.*)").unwrap();
             }
 
             let user = {
-
-                    let data = ctx.data.lock();
-                    let conn = data.get::<DbKey>().expect("AAAA").lock();
+                    let data = ctx.data.read();
+                    let conn = data.get::<DbKey>().expect("AAAA").lock(); // TODO: Prepare this query for extra speed
                     let mut rows = conn.query("SELECT * FROM users WHERE id = $1",  &[&(*msg.author.id.as_u64() as i64)]).unwrap();
                     let row = { if rows.is_empty() {
                             conn.execute("INSERT INTO users (id) VALUES ($1)", &[&(*msg.author.id.as_u64() as i64)]);
@@ -156,7 +202,7 @@ impl EventHandler for Handler {
                 for player in player_2_str.split(" ") {
                 } // Alright, now we have our players
 
-                msg.reply(&skullgirls::simulate_fight(vec!(player_1_str),vec!(player_2_str)));
+                msg.reply(&ctx,&skullgirls::simulate_fight(vec!(player_1_str),vec!(player_2_str)));
             }
 
             if remind_regex.is_match(&command_list) { // reminder handling
@@ -167,7 +213,7 @@ impl EventHandler for Handler {
                 let time_delay: Vec<&str> = reminder.get(2).unwrap().as_str().split(" ").collect();
 
                 if time_delay.len() != 2 {
-                    msg.author.direct_message(|m| m.content("Unable to parse time to remind."));
+                    msg.author.direct_message(&ctx,|m| m.content("Unable to parse time to remind."));
                 }
 
                 if let Ok(num) = time_delay[0].parse::<f64>() {
@@ -186,28 +232,28 @@ impl EventHandler for Handler {
                             "month" => 2419200.0,
                             "years" => 31449600.0,
                             "year" => 31449600.0,
-                            _ => { msg.author.direct_message(|m| m.content("Invalid measurement of time")); 0.0},
+                            _ => { msg.author.direct_message(&ctx,|m| m.content("Invalid measurement of time")); 0.0},
                     };
                     if sec_multi != 0.0 {
                         let remind_time = Utc::now() + chrono::Duration::seconds( (num * sec_multi).floor() as i64 );
-                        msg.reply(&format!("Ok, I will remind you {} around {}.",remind_text,remind_time.format("%a %b %d %Y %T UTC")));
+                        msg.reply(&ctx,&format!("Ok, I will remind you {} around {}.",remind_text,remind_time.format("%a %b %d %Y %T UTC")));
                         self.config.lock().reminders.push(Reminder {
-reminder_text: remind_text.to_string(),
-reminder_time: remind_time,
-repeat_length: 0,
-user: msg.author.id,
-channel: msg.channel_id
-});
-self.config.lock().flush();
-}
-}
-command_list = command_list.replace(reminder.get(0).unwrap().as_str(),"");
-}
-
+                            reminder_text: remind_text.to_string(),
+                            reminder_time: remind_time,
+                            repeat_length: 0,
+                            user: msg.author.id,
+                            channel: msg.channel_id
+                        });
+                        self.config.lock().flush();
+                        }
+                }
+                command_list = command_list.replace(reminder.get(0).unwrap().as_str(),"");
+        }
 if factor_regex.is_match(&command_list) {
     if let Ok(mut composite) = factor_regex.captures(&command_list).unwrap().get(1).unwrap().as_str().parse::<u64>() {
+        debug!("Factoring {}",composite);
         if composite == 1 || composite == 2 {
-            msg.reply("That's... not how this works.");
+            msg.reply(&ctx,"That's... not how this works.");
         }
         let mut factors: Vec<u64> = Vec::new();
         while composite % 2 == 0 {
@@ -255,47 +301,47 @@ if factor_regex.is_match(&command_list) {
         } else {
             reply = format!("`{} is a prime number`",factors.first().unwrap());
         }
-        msg.reply(&reply);
+        msg.reply(&ctx,&reply);
     } else {
-        msg.reply("Unable to parse factor");
+        msg.reply(&ctx,"Unable to parse factor");
     }
     command_list = command_list.replace(factor_regex.captures(&command_list).unwrap().get(0).unwrap().as_str(),"");
 }
 
 if command_list.contains("help") {
-    msg.reply("Current commands: `remind me X in Y time_units`\n`factor <u64>`");
+    msg.reply(&ctx,"Current commands: `remind me X in Y time_units`\n`factor <u64>`");
 }
 
 if user.is_admin == true  { // If is_admin
     if command_list.contains("away") {
-        ctx.idle();
+        &ctx.idle();
     } else if command_list.starts_with("/who ") {
         let a: Vec<&str> = command_list.split(' ').collect();
         if a.len() != 2 {
-            let _ = msg.author.direct_message(|m| m.content("/who <UID>"));
+            let _ = msg.author.direct_message(&ctx,|m| m.content("/who <UID>"));
             return;
         }
         let foo: u64 = match a[1].parse() {
             Ok(x) => x,
                 Err(e) => {
                     let _ = msg.author
-                        .direct_message(|m| m.content(format!("Unable to format: {}", e)));
+                        .direct_message(&ctx,|m| m.content(format!("Unable to format: {}", e)));
                     return;
                 }
         };
-        match UserId(foo).to_user() {
-            Ok(x) => msg.reply(&format!("{}",x.name)),
-            Err(x) => msg.reply(&format!("{:?}", x))
+        match UserId(foo).to_user(&ctx) {
+            Ok(x) => msg.reply(&ctx,&format!("{}",x.name)),
+            Err(x) => msg.reply(&ctx,&format!("{:?}", x))
         };
         return;
     } else if command_list.contains("plzdienow") {
-        let _ = ctx.shard.shutdown_clean();
+        let _ = &ctx.shard.shutdown_clean();
         return;
     } else if command_list.starts_with("/auth ") {
         let a: Vec<&str> = command_list.split(' ').collect();
         if a.len() != 2 {
             msg.author
-                .direct_message(|m| m.content("Try `/auth <hackmud_pass>`"))
+                .direct_message(&ctx,|m| m.content("Try `/auth <hackmud_pass>`"))
                 .unwrap();
             return;
         }
@@ -309,26 +355,43 @@ if user.is_admin == true  { // If is_admin
             Ok(x) => x,
                 Err(e) => {
                     let _ = msg.author
-                        .direct_message(|m| m.content(format!("failed to parse: {}", e)));
+                        .direct_message(&ctx,|m| m.content(format!("failed to parse: {}", e)));
                     return;
                 }
         };
         if raw["chat_token"].is_string() {
             let foo = String::from_str(raw["chat_token"].as_str().unwrap()).unwrap();
 
-                let data = ctx.data.lock();
+                let data = &ctx.data.read();
                 // TODO: Ensure that a username list is configured!
                 {
                     let conn = data.get::<DbKey>().expect("Unable to get DB!").lock();
                     if let Ok(_x) = conn.execute("UPDATE users SET hm_tok=$1 WHERE id=$2", &[&foo, &user.id]) {
-                        let _ = msg.react("✅");
+                        let _ = msg.react(&ctx,"✅");
                     }
                 }
             
         } else {
-            msg.author.direct_message(|m| m.content(format!("Error: {}",raw)));
+            msg.author.direct_message(&ctx,|m| m.content(format!("Error: {}",raw)));
         }
     }
+    else if command_list.contains("/roles") {
+        let mut member = msg.member(&ctx).unwrap();
+        self.guild_member_addition(ctx, msg.guild_id.unwrap(), member);
+    }
+    /*else if command_list.contains("/hardscan") { // TOOD: Stubbed so I can hurry and get this
+     * uploaded
+        for (channel_id, channel) in &msg.guild_id.channels(&ctx) {
+            for perm in channel.permission_overwrites {
+                match perm.kind {
+                    Member(uid) => (),// insert override into hashmap keyed with user_id
+                    _ => ()
+                }
+                Override { id: channel_id, allow: perm.allow, deny: perm.deny };
+            }
+        }
+        msg.guild_id.members(&ctx) // Then iterate over each user, picking up their roles and inserting them into the db
+    }*/
 }
 }
 }
@@ -337,14 +400,14 @@ fn ready(&self, ctx: Context, _: Ready) {
     let client = reqwest::Client::new();
     let local_safe_var = unsafe { THREADED };
     if local_safe_var == false {
-        ctx.set_game(Game::listening("the conversation"));
-        ctx.idle();
+        ctx.set_activity(Activity::listening("the conversation"));
         unsafe {
             THREADED = true;
         }
         let config = Arc::clone(&self.config);
-        let conn = Arc::clone(ctx.data.lock().get::<DbKey>().expect("AAAA"));
+        let conn = Arc::clone(ctx.data.read().get::<DbKey>().expect("AAAA"));
         thread::spawn(move || {
+                debug!("Timed thread started");
                 let mut time = Utc::now().timestamp() - 31;
                 loop {
                 {
@@ -352,13 +415,13 @@ fn ready(&self, ctx: Context, _: Ready) {
 
                 for hm_user in conn.lock().query("SELECT id, hm_tok, hm_usernames FROM users WHERE hm_tok IS NOT NULL", &[]).unwrap().iter() {
                     let uid: i64 = hm_user.get(0);
-                    let user = UserId(uid as u64).to_user().unwrap(); // TODO: Delete the hm_tok if this operation fails, since I can't contact them.
+                    let user = UserId(uid as u64).to_user(&ctx).unwrap(); // TODO: Delete the hm_tok if this operation fails, since I can't contact them.
                     match hm::hm_loop(time, &client, hm_user.get(1), hm_user.get(2)) {
                         Ok(x) => {
                             for i in x {
-                                let _ = user.direct_message(|m| m.content(i));
+                                let _ = user.direct_message(&ctx,|m| m.content(i));
                             }},
-                        Err(e) => {let _ = user.direct_message(|m| m.content(e));},
+                        Err(e) => {let _ = user.direct_message(&ctx,|m| m.content(e));},
                     }
                 }
 
@@ -366,16 +429,16 @@ fn ready(&self, ctx: Context, _: Ready) {
                 let mut expired_reminders: Vec<usize> = Vec::new();
                 for (index, reminder) in conf.reminders.iter().enumerate() {
                     if reminder.reminder_time < cur_time {
-                        let text = serenity::utils::content_safe(&reminder.reminder_text, {&serenity::utils::ContentSafeOptions::default()});
-                        match reminder.channel.to_channel() {
+                        let text = serenity::utils::content_safe(&ctx,&reminder.reminder_text, {&serenity::utils::ContentSafeOptions::default()});
+                        match reminder.channel.to_channel(&ctx) {
                             Ok(thing) => {
-                                    if let Err(e) = thing.id().say(&format!("{} Don't forget {}", reminder.user.mention(), text)) {
+                                    if let Err(e) = thing.id().say(&ctx,&format!("{} Don't forget {}", reminder.user.mention(), text)) {
                                         println!("Failed to send message to {} : {}", reminder.channel, reminder.reminder_text);
                                     }
                             },   
                             Err(e) => { 
-                                if let Ok(dm) = reminder.user.create_dm_channel() {
-                                    dm.say(&format!("{} Don't forget {}", reminder.user.mention(), reminder.reminder_text));
+                                if let Ok(dm) = reminder.user.create_dm_channel(&ctx) {
+                                    dm.say(&ctx,&format!("{} Don't forget {}", reminder.user.mention(), reminder.reminder_text));
                                 } else {
                                     println!("Failed to send DM to {} : {}", reminder.user.mention(), reminder.reminder_text);
                                 }
@@ -409,11 +472,16 @@ fn main() {
 
     let conn = Connection::connect(env::var("DATABASE_URL").expect("Please set DATABASE_URL to the postgres database"),TlsMode::None).expect("Failed to connect to db!"); // TODO: Use an env var for the db url
     // TODO: Gracefully handle a lack of db!
+    
+
+    debug!("DB connection established");
 
     let mut client = Client::new(&token, Handler::new()).unwrap();
+    
+    debug!("serenity Client started");
 
     {
-        client.data.lock().insert::<DbKey>(Arc::new(Mutex::new(conn)));
+        client.data.write().insert::<DbKey>(Arc::new(Mutex::new(conn)));
     }
 
     // So for the hackmud chat feature, some kind of feature where you can define what users you
@@ -423,4 +491,5 @@ fn main() {
     if let Err(why) = client.start() {
         println!("Client error: {:?}", why);
     }
+    debug!("Pre-init complete");
 }
