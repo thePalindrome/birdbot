@@ -233,9 +233,9 @@ impl EventHandler for Handler {
                             m.embed(|e| {
                                 e.title(format!("Weather for {}", weather.city.name))
                                     .image(format!("https://openweathermap.org/img/wn/{}@2x.png",now.weather[0].icon))
-                                    .description(format!("{}°C {}%💧 {}%☁️  {}💨",now.main.temp - 273.15, now.main.humidity,now.clouds.all, now.wind.speed));
+                                    .description(format!("{}°F {}%💧 {}%☁️  {}💨",(now.main.temp - 273.15) as f32 * (9/5) as f32 + 32.0, now.main.humidity,now.clouds.all, now.wind.speed));
                                 for w in weather.list.iter().step_by(8).skip(1) {
-                                    e.field(w.dt_txt.clone(), format!("{}  {}°C", w.weather[0].description, w.main.temp - 273.15),false);
+                                    e.field(w.dt_txt.clone(), format!("{}  {}°F", w.weather[0].description, (w.main.temp - 273.15) as f32 * (9/5) as f32 + 32.0),false);
                                 }
                                 e
                             });
@@ -293,7 +293,7 @@ impl EventHandler for Handler {
                 command_list = command_list.replace(reminder.get(0).unwrap().as_str(),"");
         }
 if factor_regex.is_match(&command_list) {
-    if let Some(mut composite) = BigUint::from_radix_be(factor_regex.captures(&command_list).unwrap().get(1).unwrap().as_str().as_bytes(), 10) {
+    if let Some(mut composite) = BigUint::parse_bytes(factor_regex.captures(&command_list).unwrap().get(1).unwrap().as_str().as_bytes(), 10) {
         if composite > BigUint::from(std::u64::MAX) {
             msg.reply(&ctx, "What do you think I am, a crypto breaker?");
         } else {
