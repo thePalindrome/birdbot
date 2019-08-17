@@ -5,6 +5,7 @@ extern crate regex;
 extern crate serde;
 extern crate env_logger;
 extern crate typemap;
+extern crate num_bigint;
 
 #[macro_use] extern crate serde_derive;
 #[macro_use] extern crate serde_json;
@@ -40,6 +41,8 @@ use postgres::{Connection, TlsMode};
 
 use typemap::Key;
 
+use num_bigint::BigUint;
+
 
 struct DbKey;
 impl Key for DbKey { type Value = Arc<Mutex<Connection>>; }
@@ -72,7 +75,7 @@ struct MemberId {
     gid: i64
 }
 
-#[derive(Debug, FromSql, ToSql)]
+#[derive(Debug, FromSql, ToSql, Clone)]
 #[postgres(name = "permission_override")]
 struct Override {
     channel: i64,
@@ -129,6 +132,12 @@ fn paying_attention(ctx: &Context, msg: &Message) -> bool{
 }
 
 impl EventHandler for Handler {
+    fn guild_ban_addition(&self, ctx: Context, guild_id: GuildId, user: User) {
+        // TODO: Remove roles/overrides on ban
+    }
+    fn guild_member_update(&self, ctx: Context, guild_id: GuildId, _old_if_available: Option<Member>, member: Member) {
+
+    }
     fn guild_member_addition(&self, ctx: Context, guild_id: GuildId, mut member: Member) {
         let data = ctx.data.read();
         let conn = data.get::<DbKey>().expect("Failed to read db handle").lock();
@@ -250,31 +259,34 @@ impl EventHandler for Handler {
                 command_list = command_list.replace(reminder.get(0).unwrap().as_str(),"");
         }
 if factor_regex.is_match(&command_list) {
-    if let Ok(mut composite) = factor_regex.captures(&command_list).unwrap().get(1).unwrap().as_str().parse::<u64>() {
+    if let Some(mut composite) = BigUint::from_radix_be(factor_regex.captures(&command_list).unwrap().get(1).unwrap().as_str().as_bytes(), 10) {
+        if composite > BigUint::from(std::u64::MAX) {
+            msg.reply(&ctx, "What do you think I am, a crypto breaker?");
+        } else {
         debug!("Factoring {}",composite);
-        if composite == 1 || composite == 2 {
+        if composite == BigUint::from(1u64) || composite == BigUint::from(0u64)  {
             msg.reply(&ctx,"That's... not how this works.");
+        } else {
+        let mut factors: Vec<BigUint> = Vec::new();
+        while &composite % 2u64 == BigUint::from(0u64) {
+            composite /= 2u64;
+            factors.push(BigUint::from(2u64));
         }
-        let mut factors: Vec<u64> = Vec::new();
-        while composite % 2 == 0 {
-            composite /= 2;
-            factors.push(2);
-        }
-        let mut f = 3;
-        while f * f <= composite {
-            if composite % f == 0 {
-                factors.push(f);
-                composite /= f;
+        let mut f: BigUint = BigUint::from(3u64);
+        while &f * &f <= composite {
+            if &composite % &f == BigUint::from(0u64) {
+                factors.push(f.clone());
+                composite /= &f;
             } else {
-                f += 2;
+                f += BigUint::from(2u64);
             }
         }
-        if composite != 1 { 
+        if composite != BigUint::from(1u64) { 
             factors.push(composite); 
         }
         let mut reply: String = "`".to_string();
         if factors.len() > 1 {
-            let mut cur_factor: &u64 = factors.first().unwrap();
+            let mut cur_factor: &BigUint = factors.first().unwrap();
             let mut times_repeated = 1;
             for i in factors.iter().skip(1) {
                 if i != cur_factor {
@@ -302,6 +314,7 @@ if factor_regex.is_match(&command_list) {
             reply = format!("`{} is a prime number`",factors.first().unwrap());
         }
         msg.reply(&ctx,&reply);
+        } }
     } else {
         msg.reply(&ctx,"Unable to parse factor");
     }
@@ -376,22 +389,54 @@ if user.is_admin == true  { // If is_admin
         }
     }
     else if command_list.contains("/roles") {
-        let mut member = msg.member(&ctx).unwrap();
+        let member = msg.member(&ctx).unwrap();
         self.guild_member_addition(ctx, msg.guild_id.unwrap(), member);
     }
-    /*else if command_list.contains("/hardscan") { // TOOD: Stubbed so I can hurry and get this
-     * uploaded
-        for (channel_id, channel) in &msg.guild_id.channels(&ctx) {
+    else if command_list.contains("/hardscan") { // TOOD: Stubbed so I can hurry and get this uploaded
+
+        use serenity::model::prelude::PermissionOverwriteType::Member;
+        use std::collections::HashMap;
+
+        let data = ctx.data.read();
+        let conn = data.get::<DbKey>().expect("Failed to read db handle").lock();
+        let guild_id = msg.guild_id.expect("No guild_id?");
+        let mut updates = 0;
+        let mut perm_map: HashMap<serenity::model::id::UserId, Vec<Override>> = HashMap::new();
+
+        for (channel_id, channel) in guild_id.channels(&ctx).unwrap() {
             for perm in channel.permission_overwrites {
                 match perm.kind {
-                    Member(uid) => (),// insert override into hashmap keyed with user_id
+                    Member(uid) => {
+                        let overrides = {
+                            let mut override_vec = vec!( Override { channel: *channel_id.as_u64() as i64, allow: perm.allow.bits as i64, deny: perm.deny.bits as i64 } );
+                            if let Some(overrides_old) = perm_map.get_mut(&uid) {
+                                override_vec.append(overrides_old);
+                            }
+                            override_vec
+                        };
+                        perm_map.insert(uid, overrides.to_vec());
+                        },// insert override into hashmap keyed with user_id
                     _ => ()
                 }
-                Override { id: channel_id, allow: perm.allow, deny: perm.deny };
             }
         }
-        msg.guild_id.members(&ctx) // Then iterate over each user, picking up their roles and inserting them into the db
-    }*/
+        for member in guild_id.members(&ctx, Some(100), None).unwrap() { // Then iterate over each user, picking up their roles and inserting them into the db
+            let db_role_list: Vec<i64> = member.roles.iter().map(|x| *x.as_u64() as i64).collect();
+            let overrides = if perm_map.get(&member.user_id()).is_some() {
+                    perm_map.get(&member.user_id()).unwrap().to_vec()
+                } else {
+                    Vec::<Override>::new()
+                };
+                
+            updates += conn.execute("INSERT INTO members(id,roles,overrides) VALUES (
+            (CAST($2 AS BIGINT) , CAST($3 AS BIGINT) ),
+            $1,
+            $4
+            ) ON CONFLICT (id) DO UPDATE SET roles = $1",
+                &[&db_role_list, &(*member.user_id().as_u64() as i64), &(*guild_id.as_u64() as i64), &overrides ]).unwrap();
+        }
+        msg.reply(&ctx,format!("{} users registered", updates));
+    }
 }
 }
 }
