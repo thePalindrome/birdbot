@@ -138,9 +138,22 @@ fn paying_attention(ctx: &Context, msg: &Message) -> bool{
 
 impl EventHandler for Handler {
     fn guild_ban_addition(&self, ctx: Context, guild_id: GuildId, user: User) {
-        // TODO: Remove roles/overrides on ban
+        let data = ctx.data.read();
+        let conn = data.get::<DbKey>().expect("Failed to read db handle").lock();
+        conn.execute("DELETE FROM members WHERE id = (CAST($2 AS BIGINT) , CAST($3 AS BIGINT) )",
+            &[&(*user.id.as_u64() as i64), &(*guild_id.as_u64() as i64)]);
     }
     fn guild_member_update(&self, ctx: Context, _old: Option<Member>, member: Member) {
+        println!("Updating user {}", member.user_id().as_u64());
+        let data = ctx.data.read();
+        let conn = data.get::<DbKey>().expect("Failed to read db handle").lock();
+        let db_role_list: Vec<i64> = member.roles.iter().map(|x| *x.as_u64() as i64).collect();
+        conn.execute("INSERT INTO members(id,roles,overrides) VALUES (
+            (CAST($2 AS BIGINT) , CAST($3 AS BIGINT) ),
+            $1,
+            $4
+            ) ON CONFLICT (id) DO UPDATE SET roles = $1",
+                    &[&db_role_list, &(*member.user_id().as_u64() as i64), &(*member.guild_id.as_u64() as i64), &mut Vec::<Override>::new() ]).unwrap();
 
     }
     fn guild_member_addition(&self, ctx: Context, guild_id: GuildId, mut member: Member) {
@@ -454,19 +467,22 @@ if user.is_admin == true  { // If is_admin
                 }
             }
         }
-        for member in guild_id.members(&ctx, Some(100), None).unwrap() { // Then iterate over each user, picking up their roles and inserting them into the db
+        let cached_guild = ctx.cache.read().guild(guild_id).unwrap();
+        let guild = cached_guild.read();
+        let stmnt = conn.prepare("
+            INSERT INTO members(id,roles,overrides) VALUES (
+            (CAST($2 AS BIGINT) , CAST($3 AS BIGINT) ),
+            $1,
+            $4
+            ) ON CONFLICT (id) DO UPDATE SET roles = $1").unwrap();
+        for member in guild.members.values() { // Then iterate over each user, picking up their roles and inserting them into the db
             let db_role_list: Vec<i64> = member.roles.iter().map(|x| *x.as_u64() as i64).collect();
             let overrides = if perm_map.get(&member.user_id()).is_some() {
                     perm_map.get(&member.user_id()).unwrap().to_vec()
                 } else {
                     Vec::<Override>::new()
                 };
-                
-            updates += conn.execute("INSERT INTO members(id,roles,overrides) VALUES (
-            (CAST($2 AS BIGINT) , CAST($3 AS BIGINT) ),
-            $1,
-            $4
-            ) ON CONFLICT (id) DO UPDATE SET roles = $1",
+                updates += stmnt.execute(
                 &[&db_role_list, &(*member.user_id().as_u64() as i64), &(*guild_id.as_u64() as i64), &overrides ]).unwrap();
         }
         msg.reply(&ctx,format!("{} users registered", updates));
