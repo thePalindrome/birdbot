@@ -6,6 +6,7 @@ extern crate serde;
 extern crate env_logger;
 extern crate typemap;
 extern crate num_bigint;
+extern crate openweather;
 
 #[macro_use] extern crate serde_derive;
 #[macro_use] extern crate serde_json;
@@ -43,6 +44,8 @@ use typemap::Key;
 
 use num_bigint::BigUint;
 
+use openweather::LocationSpecifier;
+
 
 struct DbKey;
 impl Key for DbKey { type Value = Arc<Mutex<Connection>>; }
@@ -59,6 +62,7 @@ reminder_text: String,
 #[derive(Deserialize, Serialize, Debug)]
 struct Config {
     reminders: Vec<Reminder>,
+    owm_key: String,
 }
 
 struct BirdbotUser {
@@ -105,6 +109,7 @@ impl Handler {
                     println!("Config read err: {}", x);
                     config = Config {
                         reminders: Vec::new(),
+                        owm_key: env::var("OWM_KEY").expect("Please set OWM_KEY to your openweathermap appid"),
                     }
                 }
         };
@@ -135,7 +140,7 @@ impl EventHandler for Handler {
     fn guild_ban_addition(&self, ctx: Context, guild_id: GuildId, user: User) {
         // TODO: Remove roles/overrides on ban
     }
-    fn guild_member_update(&self, ctx: Context, guild_id: GuildId, _old_if_available: Option<Member>, member: Member) {
+    fn guild_member_update(&self, ctx: Context, _old: Option<Member>, member: Member) {
 
     }
     fn guild_member_addition(&self, ctx: Context, guild_id: GuildId, mut member: Member) {
@@ -175,6 +180,7 @@ impl EventHandler for Handler {
                 static ref remind_regex: Regex = Regex::new(r"(?i)remind me (.*?) in (\d* \w*)( every (\d* \w*))?").unwrap();
                 static ref factor_regex: Regex = Regex::new(r"(?i)factor (.\d*)").unwrap();
                 static ref skullgirls_regex: Regex = Regex::new(r"(?i)play a game with (.*) (against|vs.|vs) (.*)").unwrap();
+                static ref weather_regex: Regex = Regex::new(r"(?i)what('s| is) the weather in (.*)\?").unwrap();
             }
 
             let user = {
@@ -212,6 +218,34 @@ impl EventHandler for Handler {
                 } // Alright, now we have our players
 
                 msg.reply(&ctx,&skullgirls::simulate_fight(vec!(player_1_str),vec!(player_2_str)));
+            }
+
+            if weather_regex.is_match(&command_list) { // Weather :D
+                let list_copy = &command_list.clone();
+                let captures = weather_regex.captures(list_copy).unwrap();
+                let zip = captures.get(2).unwrap().as_str();
+                let loc = LocationSpecifier::CityAndCountryName{city: zip, country: ""};
+                match openweather::get_5_day_forecast(loc, &self.config.lock().owm_key) {
+                    Ok(weather) => {
+                        println!("got weather");
+                        let now = &weather.list[0];
+                        msg.channel_id.send_message(&ctx, |m| {
+                            m.embed(|e| {
+                                e.title(format!("Weather for {}", weather.city.name))
+                                    .image(format!("https://openweathermap.org/img/wn/{}@2x.png",now.weather[0].icon))
+                                    .description(format!("{}°C {}%💧 {}%☁️  {}💨",now.main.temp - 273.15, now.main.humidity,now.clouds.all, now.wind.speed));
+                                for w in weather.list.iter().step_by(8).skip(1) {
+                                    e.field(w.dt_txt.clone(), format!("{}  {}°C", w.weather[0].description, w.main.temp - 273.15),false);
+                                }
+                                e
+                            });
+
+                            m
+                        });
+                    },
+                    Err(err) => { error!("{:#?}",err); },
+                };
+                command_list = command_list.replace(captures.get(0).unwrap().as_str(),"");
             }
 
             if remind_regex.is_match(&command_list) { // reminder handling

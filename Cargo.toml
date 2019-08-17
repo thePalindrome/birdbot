@@ -20,3 +20,7 @@ typemap = "0.3.3"
 postgres = "0.15.2"
 postgres-derive = "0.3"
 serenity = "0.6.2"
+
+[dependencies.openweather]
+version = "0.0.1"
+git = "https://github.com/thePalindrome/openweather"
