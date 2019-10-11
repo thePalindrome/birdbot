@@ -67,7 +67,9 @@ struct Config {
 
 struct BirdbotUser {
     id: i64,
+	#[allow(dead_code)]
     hm_tok: Option<String>,
+	#[allow(dead_code)]
     hm_usernames: Option<Vec<String>>,
     is_admin: bool
 }
@@ -91,7 +93,7 @@ impl Config {
     fn flush(&self) {
         let str = serde_json::to_string_pretty(self).unwrap();
         let mut f = File::create("/etc/birdbot").unwrap(); // TODO: Maybe make sure nobody touched it before we wipe it?
-        f.write(str.as_bytes()).unwrap();
+        f.write_all(str.as_bytes()).unwrap();
     }
 }
 
@@ -127,7 +129,7 @@ fn paying_attention(ctx: &Context, msg: &Message) -> bool{
     /*if msg.content.contains("birdbot") { // TODO: Allow disabling just using my name
       return true;
       }*/
-    if msg.mentions.iter().any( |x| { x.id == ctx.cache.read().user.id }) {
+    if msg.mentions.iter().any( |x| { x.id == ctx.cache.read().user.id } ) {
         return true;
     }
     if msg.is_private() {
@@ -140,8 +142,10 @@ impl EventHandler for Handler {
     fn guild_ban_addition(&self, ctx: Context, guild_id: GuildId, user: User) {
         let data = ctx.data.read();
         let conn = data.get::<DbKey>().expect("Failed to read db handle").lock();
-        conn.execute("DELETE FROM members WHERE id = (CAST($2 AS BIGINT) , CAST($3 AS BIGINT) )",
-            &[&(*user.id.as_u64() as i64), &(*guild_id.as_u64() as i64)]);
+        if let Err(e) = conn.execute("DELETE FROM members WHERE id = (CAST($2 AS BIGINT) , CAST($3 AS BIGINT) )",
+			&[&(*user.id.as_u64() as i64), &(*guild_id.as_u64() as i64)]) {
+				error!("Unable to remove user {} from guild {} after banning: {}",user.id,guild_id,e);
+		}
     }
     fn guild_member_update(&self, ctx: Context, _old: Option<Member>, member: Member) {
         println!("Updating user {}", member.user_id().as_u64());
@@ -165,20 +169,24 @@ impl EventHandler for Handler {
             gid: *guild_id.as_u64() as i64
         };
         // TODO: Figure out why the ToSql side of things is just so freaking broken.
-        let mut rows = conn.query("SELECT * FROM members WHERE id = ( CAST($1 AS BIGINT) , CAST($2 AS BIGINT) )", &[&member_id.uid, &member_id.gid]).unwrap(); // TODO: prepare this query for extra speed
+        let rows = conn.query("SELECT * FROM members WHERE id = ( CAST($1 AS BIGINT) , CAST($2 AS BIGINT) )", &[&member_id.uid, &member_id.gid]).unwrap(); // TODO: prepare this query for extra speed
         if !rows.is_empty() {
             let row = rows.get(0);
             let roles: Vec<i64> = row.get("roles");
             let overrides: Vec<Override> = row.get("overrides");
-            if roles.len() != 0 {
-                member.add_roles(&ctx, &roles.into_iter().map(|e| RoleId(e as u64)).collect::<Vec<_>>());
+            if !roles.is_empty() {
+                if let Err(e) = member.add_roles(&ctx, &roles.into_iter().map(|e| RoleId(e as u64)).collect::<Vec<_>>()) {
+					error!("Unable to add roles to {}: {}", member.display_name(), e);
+				}
             }
             for perm in overrides.iter() {
-                ChannelId(perm.channel as u64).create_permission(&ctx, &PermissionOverwrite {
+                if let Err(e) = ChannelId(perm.channel as u64).create_permission(&ctx, &PermissionOverwrite {
                     allow: Permissions::from_bits_truncate(perm.allow as u64),
                     deny: Permissions::from_bits_truncate(perm.deny as u64),
                     kind: PermissionOverwriteType::Member(user_id),
-                });
+                }) {
+					error!("Unable to set permissions for channel {} for user {}: {}", perm.channel, user_id, e);
+				}
             }
             /*if motd {
                 member.user.direct_message(&ctx, |m| {
@@ -190,10 +198,10 @@ impl EventHandler for Handler {
     fn message(&self, ctx: Context, msg: Message) {
         if paying_attention(&ctx,&msg) {
             lazy_static! {
-                static ref remind_regex: Regex = Regex::new(r"(?i)remind me (.*?) in (\d* \w*)( every (\d* \w*))?").unwrap();
-                static ref factor_regex: Regex = Regex::new(r"(?i)factor (.\d*)").unwrap();
-                static ref skullgirls_regex: Regex = Regex::new(r"(?i)play a game with (.*) (against|vs.|vs) (.*)").unwrap();
-                static ref weather_regex: Regex = Regex::new(r"(?i)what('s| is) the weather in (.*)\?").unwrap();
+                static ref REMIND_REGEX: Regex = Regex::new(r"(?i)remind me (.*?) in (\d* \w*)( every (\d* \w*))?").unwrap();
+                static ref FACTOR_REGEX: Regex = Regex::new(r"(?i)factor (.\d*)").unwrap();
+                static ref SKULLGIRLS_REGEX: Regex = Regex::new(r"(?i)play a game with (.*) (against|vs.|vs) (.*)").unwrap();
+                static ref WEATHER_REGEX: Regex = Regex::new(r"(?i)what('s| is) the weather in (.*)\?").unwrap();
             }
 
             let user = {
@@ -201,7 +209,7 @@ impl EventHandler for Handler {
                     let conn = data.get::<DbKey>().expect("AAAA").lock(); // TODO: Prepare this query for extra speed
                     let mut rows = conn.query("SELECT * FROM users WHERE id = $1",  &[&(*msg.author.id.as_u64() as i64)]).unwrap();
                     let row = { if rows.is_empty() {
-                            conn.execute("INSERT INTO users (id) VALUES ($1)", &[&(*msg.author.id.as_u64() as i64)]);
+                            conn.execute("INSERT INTO users (id) VALUES ($1)", &[&(*msg.author.id.as_u64() as i64)]).unwrap();
                             rows = conn.query("SELECT * FROM users WHERE id = $1", &[&(*msg.author.id.as_u64() as i64)]).unwrap();
                         }
                         rows.get(0)
@@ -217,32 +225,34 @@ impl EventHandler for Handler {
 
             let mut command_list = msg.content.clone();
 
-            if skullgirls_regex.is_match(&command_list) { // Play a round
+            if SKULLGIRLS_REGEX.is_match(&command_list) { // Play a round
                 let list_copy = &command_list.clone();
-                let captures = skullgirls_regex.captures(list_copy).unwrap(); // Safe because is_match
+                let captures = SKULLGIRLS_REGEX.captures(list_copy).unwrap(); // Safe because is_match
 
                 let player_1_str = str::replace(captures.get(1).unwrap().as_str(), ",", "");
                 let player_2_str = str::replace(captures.get(3).unwrap().as_str(), ",", "");
 
-                for player in player_1_str.split(" ") {
+                for _player in player_1_str.split(" ") {
                 }
 
-                for player in player_2_str.split(" ") {
+                for _player in player_2_str.split(" ") {
                 } // Alright, now we have our players
 
-                msg.reply(&ctx,&skullgirls::simulate_fight(vec!(player_1_str),vec!(player_2_str)));
+                if let Err(e) = msg.reply(&ctx,&skullgirls::simulate_fight(vec!(player_1_str),vec!(player_2_str))) {
+					error!("Unable to reply to {} to simulate a fight: {}",&msg.author.name, e);
+				};
             }
 
-            if weather_regex.is_match(&command_list) { // Weather :D
+            if WEATHER_REGEX.is_match(&command_list) { // Weather :D
                 let list_copy = &command_list.clone();
-                let captures = weather_regex.captures(list_copy).unwrap();
+                let captures = WEATHER_REGEX.captures(list_copy).unwrap();
                 let zip = captures.get(2).unwrap().as_str();
                 let loc = LocationSpecifier::CityAndCountryName{city: zip, country: ""};
                 match openweather::get_5_day_forecast(loc, &self.config.lock().owm_key) {
                     Ok(weather) => {
                         println!("got weather");
                         let now = &weather.list[0];
-                        msg.channel_id.send_message(&ctx, |m| {
+                        if let Err(e) = msg.channel_id.send_message(&ctx, |m| {
                             m.embed(|e| {
                                 e.title(format!("Weather for {}", weather.city.name))
                                     .image(format!("https://openweathermap.org/img/wn/{}@2x.png",now.weather[0].icon))
@@ -254,22 +264,26 @@ impl EventHandler for Handler {
                             });
 
                             m
-                        });
+                        }) {
+							error!("Unable to embed weather info: {}", e);
+						}
                     },
                     Err(err) => { error!("{:#?}",err); },
                 };
                 command_list = command_list.replace(captures.get(0).unwrap().as_str(),"");
             }
 
-            if remind_regex.is_match(&command_list) { // reminder handling
+            if REMIND_REGEX.is_match(&command_list) { // reminder handling
                 let list_copy = &command_list.clone();
-                let reminder = remind_regex.captures(list_copy).unwrap(); // Safe because I used is_match
+                let reminder = REMIND_REGEX.captures(list_copy).unwrap(); // Safe because I used is_match
 
                 let remind_text = reminder.get(1).unwrap().as_str();
-                let time_delay: Vec<&str> = reminder.get(2).unwrap().as_str().split(" ").collect();
+                let time_delay: Vec<&str> = reminder.get(2).unwrap().as_str().split(' ').collect();
 
                 if time_delay.len() != 2 {
-                    msg.author.direct_message(&ctx,|m| m.content("Unable to parse time to remind."));
+                    if let Err(e) = msg.reply(&ctx,"Unable to parse time to remind.") {
+						error!("Unable to inform {} that I was unable to parse their reminder: {}",&msg.author.name, e);
+					}
                 }
 
                 if let Ok(num) = time_delay[0].parse::<f64>() {
@@ -280,19 +294,24 @@ impl EventHandler for Handler {
                             "minute" => 60.0,
                             "hours" => 3600.0,
                             "hour" => 3600.0,
-                            "days" => 86400.0,
-                            "day" => 86400.0,
-                            "weeks" => 604800.0,
-                            "week" => 604800.0,
-                            "months" => 2419200.0,
-                            "month" => 2419200.0,
-                            "years" => 31449600.0,
-                            "year" => 31449600.0,
-                            _ => { msg.author.direct_message(&ctx,|m| m.content("Invalid measurement of time")); 0.0},
+                            "days" => 86_400.0,
+                            "day" => 86_400.0,
+                            "weeks" => 604_800.0,
+                            "week" => 604_800.0,
+                            "months" => 2_419_200.0,
+                            "month" => 2_419_200.0,
+                            "years" => 31_449_600.0,
+                            "year" => 31_449_600.0,
+                            _ => { if let Err(e) = msg.reply(&ctx,"Invalid measurement of time") {
+									error!("Unable to reply to {} regarding an invalid measurment of time: {}", &msg.author.name, e);
+								};
+								0.0},
                     };
                     if sec_multi != 0.0 {
                         let remind_time = Utc::now() + chrono::Duration::seconds( (num * sec_multi).floor() as i64 );
-                        msg.reply(&ctx,&format!("Ok, I will remind you {} around {}.",remind_text,remind_time.format("%a %b %d %Y %T UTC")));
+                        if let Err(e) = msg.reply(&ctx,&format!("Ok, I will remind you {} around {}.",remind_text,remind_time.format("%a %b %d %Y %T UTC"))) {
+							error!("Unable to inform {} about their newly set reminder: {}", &msg.author.name, e); // Should I not push the reminder?
+						}
                         self.config.lock().reminders.push(Reminder {
                             reminder_text: remind_text.to_string(),
                             reminder_time: remind_time,
@@ -305,14 +324,18 @@ impl EventHandler for Handler {
                 }
                 command_list = command_list.replace(reminder.get(0).unwrap().as_str(),"");
         }
-if factor_regex.is_match(&command_list) {
-    if let Some(mut composite) = BigUint::parse_bytes(factor_regex.captures(&command_list).unwrap().get(1).unwrap().as_str().as_bytes(), 10) {
+if FACTOR_REGEX.is_match(&command_list) {
+    if let Some(mut composite) = BigUint::parse_bytes(FACTOR_REGEX.captures(&command_list).unwrap().get(1).unwrap().as_str().as_bytes(), 10) {
         if composite > BigUint::from(std::u64::MAX) {
-            msg.reply(&ctx, "What do you think I am, a crypto breaker?");
+            if let Err(e) = msg.reply(&ctx, "What do you think I am, a crypto breaker?") {
+				error!("Unable to refuse service to {}: {}", &msg.author.name, e);
+			}
         } else {
         debug!("Factoring {}",composite);
         if composite == BigUint::from(1u64) || composite == BigUint::from(0u64)  {
-            msg.reply(&ctx,"That's... not how this works.");
+            if let Err(e) = msg.reply(&ctx,"That's... not how this works.") {
+				error!("Unable to sass the *heck* out of {}: {}", &msg.author.name, e);
+			}
         } else {
         let mut factors: Vec<BigUint> = Vec::new();
         while &composite % 2u64 == BigUint::from(0u64) {
@@ -350,7 +373,6 @@ if factor_regex.is_match(&command_list) {
             }
             if times_repeated != 1 {
                 reply.push_str(&format!(" {}^{} *", cur_factor, times_repeated));
-                times_repeated = 1;
             } else {
                 reply.push_str(&format!(" {} *", cur_factor));
             }
@@ -360,28 +382,32 @@ if factor_regex.is_match(&command_list) {
         } else {
             reply = format!("`{} is a prime number`",factors.first().unwrap());
         }
-        msg.reply(&ctx,&reply);
+        if let Err(e) = msg.reply(&ctx,&reply) {
+			error!("Unable to reply to {} with factor response: {}", &msg.author.name, e);
+		}
         } }
-    } else {
-        msg.reply(&ctx,"Unable to parse factor");
+    } else if let Err(e) = msg.reply(&ctx,"Unable to parse factor") {
+		error!("Unable to reply to {} with \"Unable to parse factor\": {}", &msg.author.name, e);
     }
-    command_list = command_list.replace(factor_regex.captures(&command_list).unwrap().get(0).unwrap().as_str(),"");
+    command_list = command_list.replace(FACTOR_REGEX.captures(&command_list).unwrap().get(0).unwrap().as_str(),"");
 }
 
 if command_list.contains("help") {
-    msg.reply(&ctx,"Current commands: `remind me X in Y time_units`\n`factor <u64>`");
+    if let Err(e) = msg.reply(&ctx,"Current commands: `remind me X in Y time_units`\n`factor <u64>`") {
+		error!("Unable to reply to {} with the help message: {}", &msg.author.name, e);
+	}
 }
 
-if user.is_admin == true  { // If is_admin
+if user.is_admin  { 
     if command_list.contains("away") {
-        &ctx.idle();
+        ctx.idle();
     } else if command_list.starts_with("/who ") {
         let a: Vec<&str> = command_list.split(' ').collect();
         if a.len() != 2 {
             let _ = msg.author.direct_message(&ctx,|m| m.content("/who <UID>"));
             return;
         }
-        let foo: u64 = match a[1].parse() {
+        let uid: u64 = match a[1].parse() {
             Ok(x) => x,
                 Err(e) => {
                     let _ = msg.author
@@ -389,10 +415,12 @@ if user.is_admin == true  { // If is_admin
                     return;
                 }
         };
-        match UserId(foo).to_user(&ctx) {
-            Ok(x) => msg.reply(&ctx,&format!("{}",x.name)),
-            Err(x) => msg.reply(&ctx,&format!("{:?}", x))
-        };
+        if let Err(e) = match UserId(uid).to_user(&ctx) {
+				Ok(x) => msg.reply(&ctx,&x.name),
+				Err(x) => msg.reply(&ctx,&format!("{:?}", x))
+			} {
+			error!("Unable to reply with user info: {}", e);
+		}
         return;
     } else if command_list.contains("plzdienow") {
         let _ = &ctx.shard.shutdown_clean();
@@ -420,19 +448,19 @@ if user.is_admin == true  { // If is_admin
                 }
         };
         if raw["chat_token"].is_string() {
-            let foo = String::from_str(raw["chat_token"].as_str().unwrap()).unwrap();
+            let tok = String::from_str(raw["chat_token"].as_str().unwrap()).unwrap();
 
                 let data = &ctx.data.read();
                 // TODO: Ensure that a username list is configured!
                 {
                     let conn = data.get::<DbKey>().expect("Unable to get DB!").lock();
-                    if let Ok(_x) = conn.execute("UPDATE users SET hm_tok=$1 WHERE id=$2", &[&foo, &user.id]) {
+                    if let Ok(_x) = conn.execute("UPDATE users SET hm_tok=$1 WHERE id=$2", &[&tok, &user.id]) {
                         let _ = msg.react(&ctx,"✅");
                     }
                 }
             
-        } else {
-            msg.author.direct_message(&ctx,|m| m.content(format!("Error: {}",raw)));
+        } else if let Err(e) = msg.author.direct_message(&ctx,|m| m.content(format!("Error: {}",raw))) {
+			error!("Unable to DM user {} regarding failure of hackmud reauthorization: {}", &msg.author.name, e);
         }
     }
     else if command_list.contains("/roles") {
@@ -452,18 +480,15 @@ if user.is_admin == true  { // If is_admin
 
         for (channel_id, channel) in guild_id.channels(&ctx).unwrap() {
             for perm in channel.permission_overwrites {
-                match perm.kind {
-                    Member(uid) => {
-                        let overrides = {
-                            let mut override_vec = vec!( Override { channel: *channel_id.as_u64() as i64, allow: perm.allow.bits as i64, deny: perm.deny.bits as i64 } );
-                            if let Some(overrides_old) = perm_map.get_mut(&uid) {
-                                override_vec.append(overrides_old);
-                            }
-                            override_vec
-                        };
-                        perm_map.insert(uid, overrides.to_vec());
-                        },// insert override into hashmap keyed with user_id
-                    _ => ()
+                if let Member(uid) = perm.kind {
+					let overrides = {
+						let mut override_vec = vec!( Override { channel: *channel_id.as_u64() as i64, allow: perm.allow.bits as i64, deny: perm.deny.bits as i64 } );
+						if let Some(overrides_old) = perm_map.get_mut(&uid) {
+							override_vec.append(overrides_old);
+						}
+						override_vec
+					};
+					perm_map.insert(uid, overrides.to_vec());
                 }
             }
         }
@@ -485,7 +510,7 @@ if user.is_admin == true  { // If is_admin
                 updates += stmnt.execute(
                 &[&db_role_list, &(*member.user_id().as_u64() as i64), &(*guild_id.as_u64() as i64), &overrides ]).unwrap();
         }
-        msg.reply(&ctx,format!("{} users registered", updates));
+        let _ = msg.reply(&ctx,format!("{} users registered", updates));
     }
 }
 }
@@ -494,7 +519,7 @@ if user.is_admin == true  { // If is_admin
 fn ready(&self, ctx: Context, _: Ready) {
     let client = reqwest::Client::new();
     let local_safe_var = unsafe { THREADED };
-    if local_safe_var == false {
+    if !local_safe_var {
         ctx.set_activity(Activity::listening("the conversation"));
         unsafe {
             THREADED = true;
@@ -528,14 +553,14 @@ fn ready(&self, ctx: Context, _: Ready) {
                         match reminder.channel.to_channel(&ctx) {
                             Ok(thing) => {
                                     if let Err(e) = thing.id().say(&ctx,&format!("{} Don't forget {}", reminder.user.mention(), text)) {
-                                        println!("Failed to send message to {} : {}", reminder.channel, reminder.reminder_text);
+                                        println!("Failed to send message to {} : {}", reminder.channel, e);
                                     }
                             },   
                             Err(e) => { 
                                 if let Ok(dm) = reminder.user.create_dm_channel(&ctx) {
-                                    dm.say(&ctx,&format!("{} Don't forget {}", reminder.user.mention(), reminder.reminder_text));
+                                    let _ = dm.say(&ctx,&format!("{} Don't forget {}", reminder.user.mention(), reminder.reminder_text));
                                 } else {
-                                    println!("Failed to send DM to {} : {}", reminder.user.mention(), reminder.reminder_text);
+                                    println!("Failed to send DM to {} : {}", reminder.user.mention(), e);
                                 }
                             }
                         }
@@ -543,10 +568,8 @@ fn ready(&self, ctx: Context, _: Ready) {
                     }
                 }
 
-                let mut offset = 0;
-                for i in expired_reminders.iter() {
+                for (offset, i) in expired_reminders.iter().enumerate() {
                     conf.reminders.remove(i - offset);
-                    offset += 1;
                 }
 
                 conf.flush();

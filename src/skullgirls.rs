@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
 extern crate rand;
 
 use self::rand::prelude::*;
@@ -32,12 +34,12 @@ pub fn simulate_fight(player_one: Vec<String>, player_two: Vec<String>) -> Strin
     ret.push_str(rng.choose(&announcer_pre).unwrap());
     ret.push_str(rng.choose(&announcer_pre).unwrap());
 
-    let winner = 0;
+    /*let winner = 0;
     while winner == 0 {
         // Decide what p1 does, then p2
         // Simulate both events
         // apply and return result
-    }
+    }*/
 
-    return ret;
+    ret
 }
