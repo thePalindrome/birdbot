@@ -129,7 +129,9 @@ fn paying_attention(ctx: &Context, msg: &Message) -> bool{
     /*if msg.content.contains("birdbot") { // TODO: Allow disabling just using my name
       return true;
       }*/
-    if msg.mentions.iter().any( |x| { x.id == ctx.cache.read().user.id } ) {
+	
+    let mentions_me = msg.mentions.iter().any( |x| { x.id == ctx.cache.read().user.id } );
+	if mentions_me {
         return true;
     }
     if msg.is_private() {
@@ -248,6 +250,10 @@ impl EventHandler for Handler {
                 let captures = WEATHER_REGEX.captures(list_copy).unwrap();
                 let zip = captures.get(2).unwrap().as_str();
                 let loc = LocationSpecifier::CityAndCountryName{city: zip, country: ""};
+				error!("{:#?}",loc.format());
+				{
+					error!("{:#?}",&self.config.lock().owm_key);
+				}
                 match openweather::get_5_day_forecast(loc, &self.config.lock().owm_key) {
                     Ok(weather) => {
                         println!("got weather");
@@ -256,9 +262,9 @@ impl EventHandler for Handler {
                             m.embed(|e| {
                                 e.title(format!("Weather for {}", weather.city.name))
                                     .image(format!("https://openweathermap.org/img/wn/{}@2x.png",now.weather[0].icon))
-                                    .description(format!("{}°F {}%💧 {}%☁️  {}💨",(now.main.temp - 273.15) as f32 * (9/5) as f32 + 32.0, now.main.humidity,now.clouds.all, now.wind.speed));
+                                    .description(format!("{:.*}°F {}%💧 {}%☁️  {}💨",1,(now.main.temp - 273.15) as f32 * (9/5) as f32 + 32.0, now.main.humidity,now.clouds.all, now.wind.speed));
                                 for w in weather.list.iter().step_by(8).skip(1) {
-                                    e.field(w.dt_txt.clone(), format!("{}  {}°F", w.weather[0].description, (w.main.temp - 273.15) as f32 * (9/5) as f32 + 32.0),false);
+                                    e.field(w.dt_txt.clone(), format!("{}  {:.*}°F", w.weather[0].description, 1, (w.main.temp - 273.15) as f32 * (9/5) as f32 + 32.0),false);
                                 }
                                 e
                             });
