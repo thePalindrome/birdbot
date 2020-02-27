@@ -330,196 +330,196 @@ impl EventHandler for Handler {
                 }
                 command_list = command_list.replace(reminder.get(0).unwrap().as_str(),"");
         }
-if FACTOR_REGEX.is_match(&command_list) {
-    if let Some(mut composite) = BigUint::parse_bytes(FACTOR_REGEX.captures(&command_list).unwrap().get(1).unwrap().as_str().as_bytes(), 10) {
-        if composite > BigUint::from(std::u64::MAX) {
-            if let Err(e) = msg.reply(&ctx, "What do you think I am, a crypto breaker?") {
-				error!("Unable to refuse service to {}: {}", &msg.author.name, e);
-			}
-        } else {
-        debug!("Factoring {}",composite);
-        if composite == BigUint::from(1u64) || composite == BigUint::from(0u64)  {
-            if let Err(e) = msg.reply(&ctx,"That's... not how this works.") {
-				error!("Unable to sass the *heck* out of {}: {}", &msg.author.name, e);
-			}
-        } else {
-        let mut factors: Vec<BigUint> = Vec::new();
-        while &composite % 2u64 == BigUint::from(0u64) {
-            composite /= 2u64;
-            factors.push(BigUint::from(2u64));
-        }
-        let mut f: BigUint = BigUint::from(3u64);
-        while &f * &f <= composite {
-            if &composite % &f == BigUint::from(0u64) {
-                factors.push(f.clone());
-                composite /= &f;
-            } else {
-                f += BigUint::from(2u64);
-            }
-        }
-        if composite != BigUint::from(1u64) { 
-            factors.push(composite); 
-        }
-        let mut reply: String = "`".to_string();
-        if factors.len() > 1 {
-            let mut cur_factor: &BigUint = factors.first().unwrap();
-            let mut times_repeated = 1;
-            for i in factors.iter().skip(1) {
-                if i != cur_factor {
-                    if times_repeated != 1 {
-                        reply.push_str(&format!(" {}^{} *",cur_factor,times_repeated));
-                        times_repeated = 1;
-                    } else {
-                        reply.push_str(&format!(" {} *",cur_factor));
-                    }
-                    cur_factor = i;
-                } else {
-                    times_repeated += 1;
-                }
-            }
-            if times_repeated != 1 {
-                reply.push_str(&format!(" {}^{} *", cur_factor, times_repeated));
-            } else {
-                reply.push_str(&format!(" {} *", cur_factor));
-            }
-            let length = reply.len();
-            reply.truncate(length-2);
-            reply.push('`');
-        } else {
-            reply = format!("`{} is a prime number`",factors.first().unwrap());
-        }
-        if let Err(e) = msg.reply(&ctx,&reply) {
-			error!("Unable to reply to {} with factor response: {}", &msg.author.name, e);
+	if FACTOR_REGEX.is_match(&command_list) {
+	    if let Some(mut composite) = BigUint::parse_bytes(FACTOR_REGEX.captures(&command_list).unwrap().get(1).unwrap().as_str().as_bytes(), 10) {
+		if composite > BigUint::from(std::u64::MAX) {
+		    if let Err(e) = msg.reply(&ctx, "What do you think I am, a crypto breaker?") {
+					error!("Unable to refuse service to {}: {}", &msg.author.name, e);
+				}
+		} else {
+		debug!("Factoring {}",composite);
+		if composite == BigUint::from(1u64) || composite == BigUint::from(0u64)  {
+		    if let Err(e) = msg.reply(&ctx,"That's... not how this works.") {
+					error!("Unable to sass the *heck* out of {}: {}", &msg.author.name, e);
+				}
+		} else {
+		let mut factors: Vec<BigUint> = Vec::new();
+		while &composite % 2u64 == BigUint::from(0u64) {
+		    composite /= 2u64;
+		    factors.push(BigUint::from(2u64));
 		}
-        } }
-    } else if let Err(e) = msg.reply(&ctx,"Unable to parse factor") {
-		error!("Unable to reply to {} with \"Unable to parse factor\": {}", &msg.author.name, e);
-    }
-    command_list = command_list.replace(FACTOR_REGEX.captures(&command_list).unwrap().get(0).unwrap().as_str(),"");
-}
-
-if command_list.contains("help") {
-    if let Err(e) = msg.reply(&ctx,"Current commands: `remind me X in Y time_units`\n`factor <u64>`") {
-		error!("Unable to reply to {} with the help message: {}", &msg.author.name, e);
+		let mut f: BigUint = BigUint::from(3u64);
+		while &f * &f <= composite {
+		    if &composite % &f == BigUint::from(0u64) {
+			factors.push(f.clone());
+			composite /= &f;
+		    } else {
+			f += BigUint::from(2u64);
+		    }
+		}
+		if composite != BigUint::from(1u64) { 
+		    factors.push(composite); 
+		}
+		let mut reply: String = "`".to_string();
+		if factors.len() > 1 {
+		    let mut cur_factor: &BigUint = factors.first().unwrap();
+		    let mut times_repeated = 1;
+		    for i in factors.iter().skip(1) {
+			if i != cur_factor {
+			    if times_repeated != 1 {
+				reply.push_str(&format!(" {}^{} *",cur_factor,times_repeated));
+				times_repeated = 1;
+			    } else {
+				reply.push_str(&format!(" {} *",cur_factor));
+			    }
+			    cur_factor = i;
+			} else {
+			    times_repeated += 1;
+			}
+		    }
+		    if times_repeated != 1 {
+			reply.push_str(&format!(" {}^{} *", cur_factor, times_repeated));
+		    } else {
+			reply.push_str(&format!(" {} *", cur_factor));
+		    }
+		    let length = reply.len();
+		    reply.truncate(length-2);
+		    reply.push('`');
+		} else {
+		    reply = format!("`{} is a prime number`",factors.first().unwrap());
+		}
+		if let Err(e) = msg.reply(&ctx,&reply) {
+				error!("Unable to reply to {} with factor response: {}", &msg.author.name, e);
+			}
+		} }
+	    } else if let Err(e) = msg.reply(&ctx,"Unable to parse factor") {
+			error!("Unable to reply to {} with \"Unable to parse factor\": {}", &msg.author.name, e);
+	    }
+	    command_list = command_list.replace(FACTOR_REGEX.captures(&command_list).unwrap().get(0).unwrap().as_str(),"");
 	}
-}
 
-if user.is_admin  { 
-    if command_list.contains("away") {
-        ctx.idle();
-    } else if command_list.starts_with("/who ") {
-        let a: Vec<&str> = command_list.split(' ').collect();
-        if a.len() != 2 {
-            let _ = msg.author.direct_message(&ctx,|m| m.content("/who <UID>"));
-            return;
-        }
-        let uid: u64 = match a[1].parse() {
-            Ok(x) => x,
-                Err(e) => {
-                    let _ = msg.author
-                        .direct_message(&ctx,|m| m.content(format!("Unable to format: {}", e)));
-                    return;
-                }
-        };
-        if let Err(e) = match UserId(uid).to_user(&ctx) {
-				Ok(x) => msg.reply(&ctx,&x.name),
-				Err(x) => msg.reply(&ctx,&format!("{:?}", x))
-			} {
-			error!("Unable to reply with user info: {}", e);
+	if command_list.contains("help") {
+	    if let Err(e) = msg.reply(&ctx,"Current commands: `remind me X in Y time_units`\n`factor <u64>`") {
+			error!("Unable to reply to {} with the help message: {}", &msg.author.name, e);
 		}
-        return;
-    } else if command_list.contains("plzdienow") {
-        let _ = &ctx.shard.shutdown_clean();
-        return;
-    } else if command_list.starts_with("/auth ") {
-        let a: Vec<&str> = command_list.split(' ').collect();
-        if a.len() != 2 {
-            msg.author
-                .direct_message(&ctx,|m| m.content("Try `/auth <hackmud_pass>`"))
-                .unwrap();
-            return;
-        }
-        let data = json!({"pass": a[1]});
-        let mut resp = reqwest::Client::new()
-            .post("https://www.hackmud.com/mobile/get_token.json")
-            .json(&data)
-            .send()
-            .unwrap();
-        let raw: Value = match resp.json() {
-            Ok(x) => x,
-                Err(e) => {
-                    let _ = msg.author
-                        .direct_message(&ctx,|m| m.content(format!("failed to parse: {}", e)));
-                    return;
-                }
-        };
-        if raw["chat_token"].is_string() {
-            let tok = String::from_str(raw["chat_token"].as_str().unwrap()).unwrap();
+	}
 
-                let data = &ctx.data.read();
-                // TODO: Ensure that a username list is configured!
-                {
-                    let conn = data.get::<DbKey>().expect("Unable to get DB!").lock();
-                    if let Ok(_x) = conn.execute("UPDATE users SET hm_tok=$1 WHERE id=$2", &[&tok, &user.id]) {
-                        let _ = msg.react(&ctx,"✅");
-                    }
-                }
-            
-        } else if let Err(e) = msg.author.direct_message(&ctx,|m| m.content(format!("Error: {}",raw))) {
-			error!("Unable to DM user {} regarding failure of hackmud reauthorization: {}", &msg.author.name, e);
-        }
+	if user.is_admin  { 
+	    if command_list.contains("away") {
+		ctx.idle();
+	    } else if command_list.starts_with("/who ") {
+		let a: Vec<&str> = command_list.split(' ').collect();
+		if a.len() != 2 {
+		    let _ = msg.author.direct_message(&ctx,|m| m.content("/who <UID>"));
+		    return;
+		}
+		let uid: u64 = match a[1].parse() {
+		    Ok(x) => x,
+			Err(e) => {
+			    let _ = msg.author
+				.direct_message(&ctx,|m| m.content(format!("Unable to format: {}", e)));
+			    return;
+			}
+		};
+		if let Err(e) = match UserId(uid).to_user(&ctx) {
+					Ok(x) => msg.reply(&ctx,&x.name),
+					Err(x) => msg.reply(&ctx,&format!("{:?}", x))
+				} {
+				error!("Unable to reply with user info: {}", e);
+			}
+		return;
+	    } else if command_list.contains("plzdienow") {
+		let _ = &ctx.shard.shutdown_clean();
+		return;
+	    } else if command_list.starts_with("/auth ") {
+		let a: Vec<&str> = command_list.split(' ').collect();
+		if a.len() != 2 {
+		    msg.author
+			.direct_message(&ctx,|m| m.content("Try `/auth <hackmud_pass>`"))
+			.unwrap();
+		    return;
+		}
+		let data = json!({"pass": a[1]});
+		let mut resp = reqwest::Client::new()
+		    .post("https://www.hackmud.com/mobile/get_token.json")
+		    .json(&data)
+		    .send()
+		    .unwrap();
+		let raw: Value = match resp.json() {
+		    Ok(x) => x,
+			Err(e) => {
+			    let _ = msg.author
+				.direct_message(&ctx,|m| m.content(format!("failed to parse: {}", e)));
+			    return;
+			}
+		};
+		if raw["chat_token"].is_string() {
+		    let tok = String::from_str(raw["chat_token"].as_str().unwrap()).unwrap();
+
+			let data = &ctx.data.read();
+			// TODO: Ensure that a username list is configured!
+			{
+			    let conn = data.get::<DbKey>().expect("Unable to get DB!").lock();
+			    if let Ok(_x) = conn.execute("UPDATE users SET hm_tok=$1 WHERE id=$2", &[&tok, &user.id]) {
+				let _ = msg.react(&ctx,"✅");
+			    }
+			}
+
+		} else if let Err(e) = msg.author.direct_message(&ctx,|m| m.content(format!("Error: {}",raw))) {
+				error!("Unable to DM user {} regarding failure of hackmud reauthorization: {}", &msg.author.name, e);
+		}
+	    }
+	    else if command_list.contains("/roles") {
+		let member = msg.member(&ctx).unwrap();
+		self.guild_member_addition(ctx, msg.guild_id.unwrap(), member);
+	    }
+	    else if command_list.contains("/hardscan") { // TOOD: Stubbed so I can hurry and get this uploaded
+
+		use serenity::model::prelude::PermissionOverwriteType::Member;
+		use std::collections::HashMap;
+
+		let data = ctx.data.read();
+		let conn = data.get::<DbKey>().expect("Failed to read db handle").lock();
+		let guild_id = msg.guild_id.expect("No guild_id?");
+		let mut updates = 0;
+		let mut perm_map: HashMap<serenity::model::id::UserId, Vec<Override>> = HashMap::new();
+
+		for (channel_id, channel) in guild_id.channels(&ctx).unwrap() {
+		    for perm in channel.permission_overwrites {
+			if let Member(uid) = perm.kind {
+						let overrides = {
+							let mut override_vec = vec!( Override { channel: *channel_id.as_u64() as i64, allow: perm.allow.bits as i64, deny: perm.deny.bits as i64 } );
+							if let Some(overrides_old) = perm_map.get_mut(&uid) {
+								override_vec.append(overrides_old);
+							}
+							override_vec
+						};
+						perm_map.insert(uid, overrides.to_vec());
+			}
+		    }
+		}
+		let cached_guild = ctx.cache.read().guild(guild_id).unwrap();
+		let guild = cached_guild.read();
+		let stmnt = conn.prepare("
+		    INSERT INTO members(id,roles,overrides) VALUES (
+		    (CAST($2 AS BIGINT) , CAST($3 AS BIGINT) ),
+		    $1,
+		    $4
+		    ) ON CONFLICT (id) DO UPDATE SET roles = $1").unwrap();
+		for member in guild.members.values() { // Then iterate over each user, picking up their roles and inserting them into the db
+		    let db_role_list: Vec<i64> = member.roles.iter().map(|x| *x.as_u64() as i64).collect();
+		    let overrides = if perm_map.get(&member.user_id()).is_some() {
+			    perm_map.get(&member.user_id()).unwrap().to_vec()
+			} else {
+			    Vec::<Override>::new()
+			};
+			updates += stmnt.execute(
+			&[&db_role_list, &(*member.user_id().as_u64() as i64), &(*guild_id.as_u64() as i64), &overrides ]).unwrap();
+		}
+		let _ = msg.reply(&ctx,format!("{} users registered", updates));
+	    }
+	}
     }
-    else if command_list.contains("/roles") {
-        let member = msg.member(&ctx).unwrap();
-        self.guild_member_addition(ctx, msg.guild_id.unwrap(), member);
-    }
-    else if command_list.contains("/hardscan") { // TOOD: Stubbed so I can hurry and get this uploaded
-
-        use serenity::model::prelude::PermissionOverwriteType::Member;
-        use std::collections::HashMap;
-
-        let data = ctx.data.read();
-        let conn = data.get::<DbKey>().expect("Failed to read db handle").lock();
-        let guild_id = msg.guild_id.expect("No guild_id?");
-        let mut updates = 0;
-        let mut perm_map: HashMap<serenity::model::id::UserId, Vec<Override>> = HashMap::new();
-
-        for (channel_id, channel) in guild_id.channels(&ctx).unwrap() {
-            for perm in channel.permission_overwrites {
-                if let Member(uid) = perm.kind {
-					let overrides = {
-						let mut override_vec = vec!( Override { channel: *channel_id.as_u64() as i64, allow: perm.allow.bits as i64, deny: perm.deny.bits as i64 } );
-						if let Some(overrides_old) = perm_map.get_mut(&uid) {
-							override_vec.append(overrides_old);
-						}
-						override_vec
-					};
-					perm_map.insert(uid, overrides.to_vec());
-                }
-            }
-        }
-        let cached_guild = ctx.cache.read().guild(guild_id).unwrap();
-        let guild = cached_guild.read();
-        let stmnt = conn.prepare("
-            INSERT INTO members(id,roles,overrides) VALUES (
-            (CAST($2 AS BIGINT) , CAST($3 AS BIGINT) ),
-            $1,
-            $4
-            ) ON CONFLICT (id) DO UPDATE SET roles = $1").unwrap();
-        for member in guild.members.values() { // Then iterate over each user, picking up their roles and inserting them into the db
-            let db_role_list: Vec<i64> = member.roles.iter().map(|x| *x.as_u64() as i64).collect();
-            let overrides = if perm_map.get(&member.user_id()).is_some() {
-                    perm_map.get(&member.user_id()).unwrap().to_vec()
-                } else {
-                    Vec::<Override>::new()
-                };
-                updates += stmnt.execute(
-                &[&db_role_list, &(*member.user_id().as_u64() as i64), &(*guild_id.as_u64() as i64), &overrides ]).unwrap();
-        }
-        let _ = msg.reply(&ctx,format!("{} users registered", updates));
-    }
-}
-}
 }
 
 fn ready(&self, ctx: Context, _: Ready) {
