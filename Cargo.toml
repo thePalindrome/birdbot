@@ -19,7 +19,7 @@ log = "0.4.0"
 typemap = "0.3.3"
 postgres = "0.15.2"
 postgres-derive = "0.3"
-serenity = "0.6.2"
+serenity = "0.7"
 
 [dependencies.openweather]
 version = "0.0.2"

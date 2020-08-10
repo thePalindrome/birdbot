@@ -31,11 +31,6 @@ impl fmt::Display for Msg {
     }
 }
 
-struct ChatReturn {
-    status: u8,
-    messages: Vec<Msg>
-}
-
 #[derive(Deserialize)]
 struct SeanResponse {
     chats: HashMap<String, Vec<Msg>>,
@@ -43,7 +38,7 @@ struct SeanResponse {
 }
 
 pub fn hm_loop(time: i64, client: &reqwest::Client, token: String, usernames: Vec<String>) -> Result<Vec<String>, String> {
-    let mut msgVec = Vec::new();
+    let mut msg_vec = Vec::new();
     if !token.is_empty() {
         let data = json!({"chat_token": token,
                 "usernames":usernames,
@@ -96,12 +91,12 @@ pub fn hm_loop(time: i64, client: &reqwest::Client, token: String, usernames: Ve
                 for message in user {
                     if let Some(u) = message.clone().to_user {
                         if &u == name {
-                            msgVec.push(format!("{}",message));
+                            msg_vec.push(format!("{}",message));
                         }
                     }
                 }
             }
         }
     }
-    Ok(msgVec)
+    Ok(msg_vec)
 }
