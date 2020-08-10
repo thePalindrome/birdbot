@@ -239,8 +239,8 @@ impl EventHandler for Handler {
                 static ref FACTOR_REGEX: Regex = Regex::new(r"(?i)factor (.\d*)").unwrap();
                 static ref SKULLGIRLS_REGEX: Regex = Regex::new(r"(?i)play a game with (.*) (against|vs.|vs) (.*)").unwrap();
                 static ref WEATHER_REGEX: Regex = Regex::new(r"(?i)what('s| is) the weather in (.*)\?").unwrap();
-                static ref list_reminders_regex: Regex = Regex::new(r"(what( are\re)|list) my reminders").unwrap();
-                static ref cancel_reminder_regex: Regex = Regex::new(r"cancel reminder (\d*)").unwrap();
+                static ref LIST_REMINDERS_REGEX: Regex = Regex::new(r"(what( are\re)|list) my reminders").unwrap();
+                static ref CANCEL_REMINDER_REGEX: Regex = Regex::new(r"cancel reminder (\d*)").unwrap();
             }
 
             let user = {
@@ -282,9 +282,9 @@ impl EventHandler for Handler {
 				};
             }
 
-            if cancel_reminder_regex.is_match(&command_list) {
+            if CANCEL_REMINDER_REGEX.is_match(&command_list) {
                 let list_copy = &command_list.clone();
-                let captures = cancel_reminder_regex.captures(list_copy).unwrap(); // Known safe due to is_match
+                let captures = CANCEL_REMINDER_REGEX.captures(list_copy).unwrap(); // Known safe due to is_match
                 let id = captures.get(1).unwrap().as_str().parse::<u64>().unwrap(); // Known good.
                 if let Some(reminder) = self.config.lock().reminders.get(&id) {
                     if reminder.user != msg.author.id { // Not yours!
@@ -300,7 +300,7 @@ impl EventHandler for Handler {
                 }
             }
 
-            if msg.is_private() && list_reminders_regex.is_match(&command_list) {
+            if msg.is_private() && LIST_REMINDERS_REGEX.is_match(&command_list) {
                 let mut ret = String::new();
                 for (id, reminder) in self.config.lock().reminders.iter() {
                     if reminder.user == msg.author.id {
@@ -472,7 +472,7 @@ impl EventHandler for Handler {
 	}
 
 	if command_list.contains("help") {
-	    if let Err(e) = msg.reply(&ctx,"Current commands: `remind me X in Y time_units`\n`factor <u64>`") {
+	    if let Err(e) = msg.reply(&ctx,"Current commands: `remind me X in Y time_units`\n`factor <u64>`\nlist my reminders/what are my reminders/what're my reminders\ncancel reminder <id>") {
 			error!("Unable to reply to {} with the help message: {}", &msg.author.name, e);
 		}
 	}
@@ -481,7 +481,7 @@ if command_list.contains("goodnight") { // Rough 'goodnight' handling
     if self.config.lock().delay_dead_mans_switches(msg.author.id.to_string(), 32400) {
         let _ = msg.react(&ctx, "🌙");
     } else {
-        msg.react(&ctx, "🔅");
+        let _ = msg.react(&ctx, "🔅");
     }
 }
 
@@ -557,7 +557,6 @@ if command_list.contains("goodnight") { // Rough 'goodnight' handling
 	    else if command_list.contains("/hardscan") { // TOOD: Stubbed so I can hurry and get this uploaded
 
 		use serenity::model::prelude::PermissionOverwriteType::Member;
-		use std::collections::HashMap;
 
 		let data = ctx.data.read();
 		let conn = data.get::<DbKey>().expect("Failed to read db handle").lock();
@@ -602,8 +601,6 @@ if command_list.contains("goodnight") { // Rough 'goodnight' handling
 	}
     }
 }
-}
-}
 
 fn ready(&self, ctx: Context, _: Ready) {
     let client = reqwest::Client::new();
@@ -638,7 +635,7 @@ fn ready(&self, ctx: Context, _: Ready) {
                 let mut expired_reminders: Vec<u64> = Vec::new();
                 for (index, reminder) in conf.reminders.iter_mut() {
                     if reminder.reminder_time < cur_time {
-                        let text = serenity::utils::content_safe(&ctx,&reminder.reminder_text, {&serenity::utils::ContentSafeOptions::default()});
+                        let text = serenity::utils::content_safe(&ctx,&reminder.reminder_text, &serenity::utils::ContentSafeOptions::default());
                         match reminder.channel.to_channel(&ctx) {
                             Ok(thing) => {
                                     if let Err(e) = thing.id().say(&ctx,&format!("{} Don't forget {}", reminder.user.mention(), text)) {
