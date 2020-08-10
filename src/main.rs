@@ -28,6 +28,7 @@ use serenity::model::prelude::*;
 use serde_json::Value;
 
 use std::env;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::str::FromStr;
@@ -57,11 +58,19 @@ reminder_text: String,
                    repeat_length: u64,
                    user: UserId,
                    channel: ChannelId,
+                   locked_by_switch: bool,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+struct DeadMansSwitch {
+    reminder_id: u64,
+    timer_length: u64,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 struct Config {
-    reminders: Vec<Reminder>,
+    dead_mans_switches: HashMap<String,Vec<DeadMansSwitch>>,
+    reminders: HashMap<u64,Reminder>,
     owm_key: String,
 }
 
@@ -93,6 +102,26 @@ impl Config {
         let mut f = File::create("/etc/birdbot").unwrap(); // TODO: Maybe make sure nobody touched it before we wipe it?
         f.write(str.as_bytes()).unwrap();
     }
+
+    fn delay_dead_mans_switches(&mut self, user: String, seconds_override: i64) -> bool {
+        if let Some(switch_vec) = self.dead_mans_switches.get(&user) {
+            for switch in switch_vec {
+                let mut reminder = self.reminders.get_mut(&switch.reminder_id).expect("Dead man's switch reminder missing!"); // TODO: oh dear god please don't expect() there!
+                reminder.locked_by_switch = true;
+                if seconds_override != 0 {
+                    if reminder.reminder_time < Utc::now() + chrono::Duration::seconds(seconds_override) {
+                        reminder.reminder_time = Utc::now() + chrono::Duration::seconds(seconds_override);
+                    } else {
+                        return false;
+                    }
+                }
+                if reminder.reminder_time < Utc::now() + chrono::Duration::seconds(switch.timer_length as i64) {
+                    reminder.reminder_time = Utc::now() + chrono::Duration::seconds(switch.timer_length as i64);
+                }
+            }
+        }
+        true
+    }
 }
 
 struct Handler {
@@ -108,8 +137,9 @@ impl Handler {
                 Err(x) => {
                     println!("Config read err: {}", x);
                     config = Config {
-                        reminders: Vec::new(),
+                        reminders: HashMap::new(),
                         owm_key: env::var("OWM_KEY").expect("Please set OWM_KEY to your openweathermap appid"),
+                        dead_mans_switches: HashMap::new(),
                     }
                 }
         };
@@ -188,12 +218,19 @@ impl EventHandler for Handler {
         }
     }
     fn message(&self, ctx: Context, msg: Message) {
-        if paying_attention(&ctx,&msg) {
+        {
+            let mut conf = self.config.lock();
+            conf.delay_dead_mans_switches(msg.author.id.to_string(), 0);
+            conf.flush();
+        }
+        if paying_attention(&ctx,&msg) { // On message receive *or* change in status to anything but offline/invisible, reset the countdown on the timer.
             lazy_static! {
                 static ref remind_regex: Regex = Regex::new(r"(?i)remind me (.*?) in (\d* \w*)( every (\d* \w*))?").unwrap();
                 static ref factor_regex: Regex = Regex::new(r"(?i)factor (.\d*)").unwrap();
                 static ref skullgirls_regex: Regex = Regex::new(r"(?i)play a game with (.*) (against|vs.|vs) (.*)").unwrap();
                 static ref weather_regex: Regex = Regex::new(r"(?i)what('s| is) the weather in (.*)\?").unwrap();
+                static ref list_reminders_regex: Regex = Regex::new(r"(what( are\re)|list) my reminders").unwrap();
+                static ref cancel_reminder_regex: Regex = Regex::new(r"cancel reminder (\d*)").unwrap();
             }
 
             let user = {
@@ -233,12 +270,47 @@ impl EventHandler for Handler {
                 msg.reply(&ctx,&skullgirls::simulate_fight(vec!(player_1_str),vec!(player_2_str)));
             }
 
+            if cancel_reminder_regex.is_match(&command_list) {
+                let list_copy = &command_list.clone();
+                let captures = cancel_reminder_regex.captures(list_copy).unwrap(); // Known safe due to is_match
+                let id = captures.get(1).unwrap().as_str().parse::<u64>().unwrap(); // Known good.
+                if let Some(reminder) = self.config.lock().reminders.get(&id) {
+                    if reminder.user != msg.author.id { // Not yours!
+                        let _ = msg.reply(&ctx, "This isn't your reminder!");
+                    } else if reminder.locked_by_switch {
+                        let _ = msg.reply(&ctx, "This reminder is locked due to being handled by a Dead Man's Switch. Please contact the administrator for more information.");
+                    } else {
+                        self.config.lock().reminders.remove(&id);
+                        let _ = msg.reply(&ctx,"Successfully removed!");
+                    }
+                } else {
+                    let _ = msg.reply(&ctx, "No reminder by that id exists");
+                }
+            }
+
+            if msg.is_private() && list_reminders_regex.is_match(&command_list) {
+                let mut ret = String::new();
+                for (id, reminder) in self.config.lock().reminders.iter() {
+                    if reminder.user == msg.author.id {
+                        if reminder.locked_by_switch {
+                            ret.push('🔒');
+                        }
+                        ret.push_str( &format!("Reminder {}: Expires: {}, Channel: {}, Text: {}\n", id, reminder.reminder_time, reminder.channel, reminder.reminder_text) );
+                    }
+                }
+                let _ = msg.reply(&ctx, ret);
+                /*
+                 * List all reminders, by showing their text, when it's due, the id, and where it'd
+                 * be responded to.
+                 */
+            }
+
             if weather_regex.is_match(&command_list) { // Weather :D
                 let list_copy = &command_list.clone();
                 let captures = weather_regex.captures(list_copy).unwrap();
                 let zip = captures.get(2).unwrap().as_str();
                 let loc = LocationSpecifier::CityAndCountryName{city: zip, country: ""};
-                match openweather::get_5_day_forecast(loc, &self.config.lock().owm_key) {
+                match openweather::get_5_day_forecast(loc, &self.config.lock().owm_key) { // TODO: Handle code 429 (rate limited)
                     Ok(weather) => {
                         println!("got weather");
                         let now = &weather.list[0];
@@ -293,12 +365,13 @@ impl EventHandler for Handler {
                     if sec_multi != 0.0 {
                         let remind_time = Utc::now() + chrono::Duration::seconds( (num * sec_multi).floor() as i64 );
                         msg.reply(&ctx,&format!("Ok, I will remind you {} around {}.",remind_text,remind_time.format("%a %b %d %Y %T UTC")));
-                        self.config.lock().reminders.push(Reminder {
+                        self.config.lock().reminders.insert(Utc::now().timestamp() as u64, Reminder {
                             reminder_text: remind_text.to_string(),
                             reminder_time: remind_time,
-                            repeat_length: 0,
+                            repeat_length: 0, // TODO: Handle the final group to determine the repeat_length
                             user: msg.author.id,
-                            channel: msg.channel_id
+                            channel: msg.channel_id,
+                            locked_by_switch: false,
                         });
                         self.config.lock().flush();
                         }
@@ -370,6 +443,14 @@ if factor_regex.is_match(&command_list) {
 
 if command_list.contains("help") {
     msg.reply(&ctx,"Current commands: `remind me X in Y time_units`\n`factor <u64>`");
+}
+
+if command_list.contains("goodnight") { // Rough 'goodnight' handling
+    if self.config.lock().delay_dead_mans_switches(msg.author.id.to_string(), 32400) {
+        let _ = msg.react(&ctx, "🌙");
+    } else {
+        msg.react(&ctx, "🔅");
+    }
 }
 
 if user.is_admin == true  { // If is_admin
@@ -521,8 +602,8 @@ fn ready(&self, ctx: Context, _: Ready) {
                 }
 
                 let cur_time = Utc::now();
-                let mut expired_reminders: Vec<usize> = Vec::new();
-                for (index, reminder) in conf.reminders.iter().enumerate() {
+                let mut expired_reminders: Vec<u64> = Vec::new();
+                for (index, reminder) in conf.reminders.iter_mut() {
                     if reminder.reminder_time < cur_time {
                         let text = serenity::utils::content_safe(&ctx,&reminder.reminder_text, {&serenity::utils::ContentSafeOptions::default()});
                         match reminder.channel.to_channel(&ctx) {
@@ -539,14 +620,16 @@ fn ready(&self, ctx: Context, _: Ready) {
                                 }
                             }
                         }
-                        expired_reminders.push(index);
+                        if reminder.repeat_length > 0 { // TODO: Terrible hack, rework repeating reminders
+                            reminder.reminder_time = Utc::now() + chrono::Duration::seconds(reminder.repeat_length as i64);
+                        } else {
+                            expired_reminders.push(*index);
+                        }
                     }
                 }
 
-                let mut offset = 0;
                 for i in expired_reminders.iter() {
-                    conf.reminders.remove(i - offset);
-                    offset += 1;
+                    conf.reminders.remove(i);
                 }
 
                 conf.flush();
