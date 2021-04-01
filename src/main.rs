@@ -106,15 +106,16 @@ impl Config {
     }
 
     fn delay_dead_mans_switches(&mut self, user: String, seconds_override: i64) -> bool {
+        let mut success = true;
         if let Some(switch_vec) = self.dead_mans_switches.get(&user) {
             for switch in switch_vec {
                 let mut reminder = self.reminders.get_mut(&switch.reminder_id).expect("Dead man's switch reminder missing!"); // TODO: oh dear god please don't expect() there!
                 reminder.locked_by_switch = true;
-                if seconds_override != 0 {
+                if seconds_override > switch.timer_length as i64 {
                     if reminder.reminder_time < Utc::now() + chrono::Duration::seconds(seconds_override) {
                         reminder.reminder_time = Utc::now() + chrono::Duration::seconds(seconds_override);
                     } else {
-                        return false;
+                        success = false;
                     }
                 }
                 if reminder.reminder_time < Utc::now() + chrono::Duration::seconds(switch.timer_length as i64) {
@@ -122,7 +123,7 @@ impl Config {
                 }
             }
         }
-        true
+        success
     }
 }
 
