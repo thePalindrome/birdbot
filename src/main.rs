@@ -19,7 +19,7 @@ extern crate openweather;
 mod hm;
 mod skullgirls;
 
-static mut THREADED: bool = false;
+static SUBINIT: Once = Once::new();
 
 use serenity::Client;
 use serenity::prelude::*;
@@ -34,6 +34,7 @@ use std::io::Write;
 use std::str::FromStr;
 use std::thread;
 use std::sync::Arc;
+use std::sync::Once;
 
 use regex::Regex;
 
@@ -605,12 +606,8 @@ if command_list.contains("goodnight") { // Rough 'goodnight' handling
 
 fn ready(&self, ctx: Context, _: Ready) {
     let client = reqwest::Client::new();
-    let local_safe_var = unsafe { THREADED };
-    if !local_safe_var {
+    SUBINIT.call_once( || {
         ctx.set_activity(Activity::listening("the conversation"));
-        unsafe {
-            THREADED = true;
-        }
         let config = Arc::clone(&self.config);
         let conn = Arc::clone(ctx.data.read().get::<DbKey>().expect("AAAA"));
         thread::spawn(move || {
